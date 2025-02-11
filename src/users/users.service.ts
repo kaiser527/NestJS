@@ -2,13 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { InjectModel } from '@nestjs/mongoose';
-import { User } from './schemas/user.schema';
-import { Model } from 'mongoose';
+import { User, UserDocument } from './schemas/user.schema';
 import { genSaltSync, hashSync, compareSync } from 'bcryptjs';
+import { SoftDeleteModel } from 'soft-delete-plugin-mongoose';
+import mongoose from 'mongoose';
 
 @Injectable()
 export class UsersService {
-  constructor(@InjectModel(User.name) private UserModel: Model<User>) {}
+  constructor(
+    @InjectModel(User.name) private UserModel: SoftDeleteModel<UserDocument>,
+  ) {}
 
   getHashPassword = (password: string) => {
     const salt = genSaltSync(10);
@@ -32,12 +35,8 @@ export class UsersService {
   }
 
   async findOne(id: string) {
-    try {
-      let user = await this.UserModel.findOne({ _id: id });
-      return user;
-    } catch (e) {
-      return 'not found user';
-    }
+    if (!mongoose.Types.ObjectId.isValid(id)) return 'not found user';
+    return this.UserModel.findOne({ _id: id });
   }
 
   async findOnebyUsername(username: string) {
@@ -49,23 +48,15 @@ export class UsersService {
   }
 
   async update(id: string, updateUserDto: UpdateUserDto) {
-    try {
-      await this.UserModel.updateOne(
-        { _id: updateUserDto.id },
-        { ...updateUserDto },
-      );
-      return `This action updates a #${id} user`;
-    } catch (e) {
-      return 'not found user';
-    }
+    if (!mongoose.Types.ObjectId.isValid(id)) return 'not found user';
+    return await this.UserModel.updateOne(
+      { _id: updateUserDto.id },
+      { ...updateUserDto },
+    );
   }
 
   async remove(id: string) {
-    try {
-      await this.UserModel.deleteOne({ _id: id });
-      return `This action deletes a #${id} user`;
-    } catch (e) {
-      return 'not found user';
-    }
+    if (!mongoose.Types.ObjectId.isValid(id)) return 'not found user';
+    return this.UserModel.softDelete({ _id: id });
   }
 }
