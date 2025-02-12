@@ -4,9 +4,8 @@ import { IsNotEmpty } from 'class-validator';
 
 export class UpdateUserDto extends OmitType(CreateUserDto, [
   'password',
+  'email',
 ] as const) {
   @IsNotEmpty()
-  id: string;
-
-  address: string;
+  _id: string;
 }

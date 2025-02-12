@@ -16,11 +16,13 @@ import { AuthController } from './auth.controller';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
-        secretOrPrivateKey: configService.get<string>('JWT_ACCESS_TOKEN'),
+        secretOrPrivateKey: configService.get<string>(
+          'JWT_ACCESS_TOKEN_SECRET',
+        ),
         signOptions: {
           expiresIn: ms(
             +configService.get<string>('JWT_EXPIRE_ACCESS') *
-              +configService.get<string>('TIME_MULTIPLY'),
+              +configService.get<string>('TIME_MULTIPLY_ACCESS'),
           ),
         },
       }),
