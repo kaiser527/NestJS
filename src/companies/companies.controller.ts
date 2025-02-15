@@ -11,7 +11,7 @@ import {
 import { CompaniesService } from './companies.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
-import { ResponseMessage, User } from 'src/decorator/customize';
+import { Public, ResponseMessage, User } from 'src/decorator/customize';
 import { IUser } from 'src/users/users.interface';
 
 @Controller('companies')
@@ -24,16 +24,18 @@ export class CompaniesController {
     return this.companiesService.create(createCompanyDto, user);
   }
 
+  @Public()
   @Get()
   @ResponseMessage('Fetch list Company with paginate')
   findAll(
-    @Query('limit') limit: string,
-    @Query('page') page: string,
+    @Query('pageSize') limit: string,
+    @Query('current') page: string,
     @Query() qs: string,
   ) {
     return this.companiesService.findAll(+limit, +page, qs);
   }
 
+  @Public()
   @Get(':id')
   @ResponseMessage('Fetch Company by id')
   findOne(@Param('id') id: string) {

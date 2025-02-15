@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Post,
+  Req,
   Request,
   Res,
   UseGuards,
@@ -11,7 +12,7 @@ import { AuthService } from './auth.service';
 import { Public, ResponseMessage, User } from 'src/decorator/customize';
 import { LocalAuthGuard } from './local-auth.guard';
 import { RegisterUserDto } from 'src/users/dto/create-user.dto';
-import { Response } from 'express';
+import { Request as ExpressRequest, Response } from 'express';
 import { IUser } from 'src/users/users.interface';
 
 @Controller('auth')
@@ -37,5 +38,25 @@ export class AuthController {
   @ResponseMessage('Get user info')
   getAccount(@User() user: IUser) {
     return this.authService.getAccount(user);
+  }
+
+  @Public()
+  @Get('/refresh')
+  @ResponseMessage('Get user by refresh token')
+  handleRefreshToken(
+    @Req() request: ExpressRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const refresh_token = request.cookies['refresh_token'];
+    return this.authService.processNewToken(refresh_token, response);
+  }
+
+  @Post('/logout')
+  @ResponseMessage('Logout User')
+  handleLogoutUser(
+    @Res({ passthrough: true }) response: Response,
+    @User() user: IUser,
+  ) {
+    return this.authService.logout(user, response);
   }
 }

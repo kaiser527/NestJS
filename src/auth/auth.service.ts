@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { RegisterUserDto } from 'src/users/dto/create-user.dto';
@@ -71,5 +71,55 @@ export class AuthService {
 
   getAccount = (user: Object) => {
     return { user };
+  };
+
+  processNewToken = async (refreshToken: string, response: Response) => {
+    try {
+      this.jwtService.verify(refreshToken, {
+        secret: this.configService.get<string>('JWT_REFRESH_TOKEN_SECRET'),
+      });
+      let user = await this.usersService.findUserByToken(refreshToken);
+      if (user) {
+        const payload = {
+          sub: 'token refresh',
+          iss: 'from server',
+          _id: user._id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+        };
+        const refresh_token = this.createRefreshToken(payload);
+        await this.usersService.updateUserToken(
+          refresh_token,
+          user._id.toString(),
+        );
+        response.clearCookie('refresh_token');
+        response.cookie('refresh_token', refresh_token, {
+          httpOnly: true,
+          maxAge:
+            +this.configService.get<string>('JWT_EXPIRE_REFRESH') *
+            +this.configService.get<string>('TIME_MULTIPLY_REFRESH'),
+        });
+        return {
+          access_token: this.jwtService.sign(payload),
+          user: {
+            _id: user._id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+          },
+        };
+      } else {
+        throw new BadRequestException('Refresh token is invalid, please login');
+      }
+    } catch (e) {
+      throw new BadRequestException('Refresh token is invalid, please login');
+    }
+  };
+
+  logout = async (user: IUser, response: Response) => {
+    response.clearCookie('refresh_token');
+    await this.usersService.updateUserToken('', user._id);
+    return 'OK';
   };
 }

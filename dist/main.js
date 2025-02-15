@@ -195,16 +195,14 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core_1 = __webpack_require__(4);
 const app_module_1 = __webpack_require__(5);
-const path_1 = __webpack_require__(44);
+const path_1 = __webpack_require__(57);
 const config_1 = __webpack_require__(10);
-const jwt_auth_guard_1 = __webpack_require__(45);
-const transform_interceptor_1 = __webpack_require__(46);
+const jwt_auth_guard_1 = __webpack_require__(58);
+const transform_interceptor_1 = __webpack_require__(59);
 const common_1 = __webpack_require__(6);
-const cookie_parser_1 = __importDefault(__webpack_require__(48));
+const cookie_parser_1 = __importDefault(__webpack_require__(61));
 async function bootstrap() {
-    const app = await core_1.NestFactory.create(app_module_1.AppModule, {
-        cors: true,
-    });
+    const app = await core_1.NestFactory.create(app_module_1.AppModule);
     const configService = app.get(config_1.ConfigService);
     const reflector = app.get(core_1.Reflector);
     app.useGlobalGuards(new jwt_auth_guard_1.JwtAuthGuard(reflector));
@@ -214,9 +212,10 @@ async function bootstrap() {
     app.useGlobalInterceptors(new transform_interceptor_1.TransformInterceptor(reflector));
     app.use((0, cookie_parser_1.default)());
     app.enableCors({
-        origin: '*',
+        origin: true,
         methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
         preflightContinue: false,
+        credentials: true,
     });
     app.useGlobalPipes(new common_1.ValidationPipe());
     app.setGlobalPrefix('api');
@@ -263,6 +262,8 @@ const users_module_1 = __webpack_require__(11);
 const auth_module_1 = __webpack_require__(26);
 const soft_delete_plugin_mongoose_1 = __webpack_require__(15);
 const companies_module_1 = __webpack_require__(38);
+const jobs_module_1 = __webpack_require__(44);
+const files_module_1 = __webpack_require__(50);
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -284,6 +285,8 @@ exports.AppModule = AppModule = __decorate([
             users_module_1.UsersModule,
             auth_module_1.AuthModule,
             companies_module_1.CompaniesModule,
+            jobs_module_1.JobsModule,
+            files_module_1.FilesModule,
         ],
         controllers: [app_controller_1.AppController],
         providers: [app_service_1.AppService],
@@ -446,6 +449,12 @@ let UsersService = class UsersService {
         this.updateUserToken = async (refreshToken, _id) => {
             return await this.UserModel.updateOne({ _id: _id }, { refreshToken });
         };
+        this.setNullUserToken = async (_id) => {
+            return await this.UserModel.updateOne({ _id: _id }, { refreshToken: null });
+        };
+        this.findUserByToken = async (refreshToken) => {
+            return await this.UserModel.findOne({ refreshToken });
+        };
     }
     async create(createUserDto, user) {
         const isExist = await this.UserModel.findOne({
@@ -496,8 +505,8 @@ let UsersService = class UsersService {
     }
     async findAll(limit, page, qs) {
         const { sort, filter, population } = (0, api_query_params_1.default)(qs);
-        delete filter.page;
-        delete filter.limit;
+        delete filter.current;
+        delete filter.pageSize;
         let offset = (page - 1) * limit;
         let defaultLimit = limit ? limit : 10;
         const totalItems = (await this.UserModel.find(filter)).length;
@@ -742,8 +751,8 @@ __decorate([
 __decorate([
     (0, common_1.Get)(),
     (0, customize_1.ResponseMessage)('Fetch list User with paginate'),
-    __param(0, (0, common_1.Query)('limit')),
-    __param(1, (0, common_1.Query)('page')),
+    __param(0, (0, common_1.Query)('pageSize')),
+    __param(1, (0, common_1.Query)('current')),
     __param(2, (0, common_1.Query)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String, String, String]),
@@ -1064,6 +1073,52 @@ let AuthService = class AuthService {
         this.getAccount = (user) => {
             return { user };
         };
+        this.processNewToken = async (refreshToken, response) => {
+            try {
+                this.jwtService.verify(refreshToken, {
+                    secret: this.configService.get('JWT_REFRESH_TOKEN_SECRET'),
+                });
+                let user = await this.usersService.findUserByToken(refreshToken);
+                if (user) {
+                    const payload = {
+                        sub: 'token refresh',
+                        iss: 'from server',
+                        _id: user._id,
+                        email: user.email,
+                        name: user.name,
+                        role: user.role,
+                    };
+                    const refresh_token = this.createRefreshToken(payload);
+                    await this.usersService.updateUserToken(refresh_token, user._id.toString());
+                    response.clearCookie('refresh_token');
+                    response.cookie('refresh_token', refresh_token, {
+                        httpOnly: true,
+                        maxAge: +this.configService.get('JWT_EXPIRE_REFRESH') *
+                            +this.configService.get('TIME_MULTIPLY_REFRESH'),
+                    });
+                    return {
+                        access_token: this.jwtService.sign(payload),
+                        user: {
+                            _id: user._id,
+                            email: user.email,
+                            name: user.name,
+                            role: user.role,
+                        },
+                    };
+                }
+                else {
+                    throw new common_1.BadRequestException('Refresh token is invalid, please login');
+                }
+            }
+            catch (e) {
+                throw new common_1.BadRequestException('Refresh token is invalid, please login');
+            }
+        };
+        this.logout = async (user, response) => {
+            response.clearCookie('refresh_token');
+            await this.usersService.updateUserToken('', user._id);
+            return 'OK';
+        };
     }
     async validateUser(username, pass) {
         const user = await this.usersService.findOnebyUsername(username);
@@ -1254,7 +1309,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
-var _a, _b, _c, _d;
+var _a, _b, _c, _d, _e, _f, _g, _h;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AuthController = void 0;
 const common_1 = __webpack_require__(6);
@@ -1276,6 +1331,13 @@ let AuthController = class AuthController {
     }
     getAccount(user) {
         return this.authService.getAccount(user);
+    }
+    handleRefreshToken(request, response) {
+        const refresh_token = request.cookies['refresh_token'];
+        return this.authService.processNewToken(refresh_token, response);
+    }
+    handleLogoutUser(response, user) {
+        return this.authService.logout(user, response);
     }
 };
 exports.AuthController = AuthController;
@@ -1307,6 +1369,25 @@ __decorate([
     __metadata("design:paramtypes", [typeof (_d = typeof users_interface_1.IUser !== "undefined" && users_interface_1.IUser) === "function" ? _d : Object]),
     __metadata("design:returntype", void 0)
 ], AuthController.prototype, "getAccount", null);
+__decorate([
+    (0, customize_1.Public)(),
+    (0, common_1.Get)('/refresh'),
+    (0, customize_1.ResponseMessage)('Get user by refresh token'),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Res)({ passthrough: true })),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_e = typeof express_1.Request !== "undefined" && express_1.Request) === "function" ? _e : Object, typeof (_f = typeof express_1.Response !== "undefined" && express_1.Response) === "function" ? _f : Object]),
+    __metadata("design:returntype", void 0)
+], AuthController.prototype, "handleRefreshToken", null);
+__decorate([
+    (0, common_1.Post)('/logout'),
+    (0, customize_1.ResponseMessage)('Logout User'),
+    __param(0, (0, common_1.Res)({ passthrough: true })),
+    __param(1, (0, customize_1.User)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_g = typeof express_1.Response !== "undefined" && express_1.Response) === "function" ? _g : Object, typeof (_h = typeof users_interface_1.IUser !== "undefined" && users_interface_1.IUser) === "function" ? _h : Object]),
+    __metadata("design:returntype", void 0)
+], AuthController.prototype, "handleLogoutUser", null);
 exports.AuthController = AuthController = __decorate([
     (0, common_1.Controller)('auth'),
     __metadata("design:paramtypes", [typeof (_a = typeof auth_service_1.AuthService !== "undefined" && auth_service_1.AuthService) === "function" ? _a : Object])
@@ -1423,8 +1504,8 @@ let CompaniesService = class CompaniesService {
     }
     async findAll(limit, page, qs) {
         const { sort, filter, population } = (0, api_query_params_1.default)(qs);
-        delete filter.page;
-        delete filter.limit;
+        delete filter.current;
+        delete filter.pageSize;
         let offset = (page - 1) * limit;
         let defaultLimit = limit ? limit : 10;
         const totalItems = (await this.CompanyModel.find(filter)).length;
@@ -1513,6 +1594,10 @@ __decorate([
     (0, mongoose_1.Prop)(),
     __metadata("design:type", String)
 ], Company.prototype, "description", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", String)
+], Company.prototype, "logo", void 0);
 __decorate([
     (0, mongoose_1.Prop)({ type: Object }),
     __metadata("design:type", Object)
@@ -1605,16 +1690,18 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], CompaniesController.prototype, "create", null);
 __decorate([
+    (0, customize_1.Public)(),
     (0, common_1.Get)(),
     (0, customize_1.ResponseMessage)('Fetch list Company with paginate'),
-    __param(0, (0, common_1.Query)('limit')),
-    __param(1, (0, common_1.Query)('page')),
+    __param(0, (0, common_1.Query)('pageSize')),
+    __param(1, (0, common_1.Query)('current')),
     __param(2, (0, common_1.Query)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", void 0)
 ], CompaniesController.prototype, "findAll", null);
 __decorate([
+    (0, customize_1.Public)(),
     (0, common_1.Get)(':id'),
     (0, customize_1.ResponseMessage)('Fetch Company by id'),
     __param(0, (0, common_1.Param)('id')),
@@ -1680,6 +1767,10 @@ __decorate([
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
 ], CreateCompanyDto.prototype, "description", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateCompanyDto.prototype, "logo", void 0);
 
 
 /***/ }),
@@ -1699,13 +1790,695 @@ exports.UpdateCompanyDto = UpdateCompanyDto;
 
 /***/ }),
 /* 44 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.JobsModule = void 0;
+const common_1 = __webpack_require__(6);
+const jobs_service_1 = __webpack_require__(45);
+const jobs_controller_1 = __webpack_require__(47);
+const mongoose_1 = __webpack_require__(9);
+const job_schema_1 = __webpack_require__(46);
+let JobsModule = class JobsModule {
+};
+exports.JobsModule = JobsModule;
+exports.JobsModule = JobsModule = __decorate([
+    (0, common_1.Module)({
+        imports: [mongoose_1.MongooseModule.forFeature([{ name: job_schema_1.Job.name, schema: job_schema_1.JobSchema }])],
+        controllers: [jobs_controller_1.JobsController],
+        providers: [jobs_service_1.JobsService],
+    })
+], JobsModule);
+
+
+/***/ }),
+/* 45 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.JobsService = void 0;
+const common_1 = __webpack_require__(6);
+const job_schema_1 = __webpack_require__(46);
+const soft_delete_plugin_mongoose_1 = __webpack_require__(15);
+const mongoose_1 = __webpack_require__(9);
+const mongoose_2 = __importDefault(__webpack_require__(16));
+const api_query_params_1 = __importDefault(__webpack_require__(17));
+let JobsService = class JobsService {
+    constructor(jobModel) {
+        this.jobModel = jobModel;
+    }
+    async create(createJobDto, user) {
+        return await this.jobModel.create({
+            ...createJobDto,
+            createdBy: {
+                _id: user._id,
+                email: user.email,
+            },
+        });
+    }
+    async findAll(limit, page, qs) {
+        const { sort, filter, population } = (0, api_query_params_1.default)(qs);
+        delete filter.current;
+        delete filter.pageSize;
+        let offset = (page - 1) * limit;
+        let defaultLimit = limit ? limit : 10;
+        const totalItems = (await this.jobModel.find(filter)).length;
+        const totalPages = Math.ceil(totalItems / defaultLimit);
+        const result = await this.jobModel
+            .find(filter)
+            .skip(offset)
+            .limit(defaultLimit)
+            .sort(sort)
+            .populate(population)
+            .exec();
+        return {
+            meta: {
+                current: page,
+                pageSize: limit,
+                pages: totalPages,
+                total: totalItems,
+            },
+            result,
+        };
+    }
+    async findOne(id) {
+        return await this.jobModel.findOne({ _id: id });
+    }
+    async update(id, updateJobDto, user) {
+        if (!mongoose_2.default.Types.ObjectId.isValid(id))
+            return 'not found Job';
+        return await this.jobModel.updateOne({ _id: id }, {
+            ...updateJobDto,
+            updatedBy: {
+                _id: user._id,
+                email: user.email,
+            },
+        });
+    }
+    async remove(id, user) {
+        if (!mongoose_2.default.Types.ObjectId.isValid(id))
+            return 'not found Job';
+        await this.jobModel.updateOne({ _id: id }, {
+            deletedBy: {
+                _id: user._id,
+                email: user.email,
+            },
+        });
+        return this.jobModel.softDelete({ _id: id });
+    }
+};
+exports.JobsService = JobsService;
+exports.JobsService = JobsService = __decorate([
+    (0, common_1.Injectable)(),
+    __param(0, (0, mongoose_1.InjectModel)(job_schema_1.Job.name)),
+    __metadata("design:paramtypes", [typeof (_a = typeof soft_delete_plugin_mongoose_1.SoftDeleteModel !== "undefined" && soft_delete_plugin_mongoose_1.SoftDeleteModel) === "function" ? _a : Object])
+], JobsService);
+
+
+/***/ }),
+/* 46 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var _a, _b, _c, _d;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.JobSchema = exports.Job = void 0;
+const mongoose_1 = __webpack_require__(9);
+let Job = class Job {
+};
+exports.Job = Job;
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", String)
+], Job.prototype, "name", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", Array)
+], Job.prototype, "skills", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Object }),
+    __metadata("design:type", Object)
+], Job.prototype, "company", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", String)
+], Job.prototype, "location", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", Number)
+], Job.prototype, "salary", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", Number)
+], Job.prototype, "quantity", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", String)
+], Job.prototype, "level", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", String)
+], Job.prototype, "description", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", typeof (_a = typeof Date !== "undefined" && Date) === "function" ? _a : Object)
+], Job.prototype, "startDate", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", typeof (_b = typeof Date !== "undefined" && Date) === "function" ? _b : Object)
+], Job.prototype, "endDate", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", Boolean)
+], Job.prototype, "isActive", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Object }),
+    __metadata("design:type", Object)
+], Job.prototype, "createdBy", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Object }),
+    __metadata("design:type", Object)
+], Job.prototype, "updatedBy", void 0);
+__decorate([
+    (0, mongoose_1.Prop)({ type: Object }),
+    __metadata("design:type", Object)
+], Job.prototype, "deletedBy", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", Boolean)
+], Job.prototype, "isDeleted", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", typeof (_c = typeof Date !== "undefined" && Date) === "function" ? _c : Object)
+], Job.prototype, "createdAt", void 0);
+__decorate([
+    (0, mongoose_1.Prop)(),
+    __metadata("design:type", typeof (_d = typeof Date !== "undefined" && Date) === "function" ? _d : Object)
+], Job.prototype, "updatedAt", void 0);
+exports.Job = Job = __decorate([
+    (0, mongoose_1.Schema)({ timestamps: true })
+], Job);
+exports.JobSchema = mongoose_1.SchemaFactory.createForClass(Job);
+
+
+/***/ }),
+/* 47 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+var _a, _b, _c, _d, _e, _f;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.JobsController = void 0;
+const common_1 = __webpack_require__(6);
+const jobs_service_1 = __webpack_require__(45);
+const create_job_dto_1 = __webpack_require__(48);
+const update_job_dto_1 = __webpack_require__(49);
+const customize_1 = __webpack_require__(24);
+const users_interface_1 = __webpack_require__(25);
+let JobsController = class JobsController {
+    constructor(jobsService) {
+        this.jobsService = jobsService;
+    }
+    create(createJobDto, user) {
+        return this.jobsService.create(createJobDto, user);
+    }
+    findAll(limit, page, qs) {
+        return this.jobsService.findAll(+limit, +page, qs);
+    }
+    findOne(id) {
+        return this.jobsService.findOne(id);
+    }
+    update(id, updateJobDto, user) {
+        return this.jobsService.update(id, updateJobDto, user);
+    }
+    remove(id, user) {
+        return this.jobsService.remove(id, user);
+    }
+};
+exports.JobsController = JobsController;
+__decorate([
+    (0, common_1.Post)(),
+    (0, customize_1.ResponseMessage)('Create new Job'),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, customize_1.User)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_b = typeof create_job_dto_1.CreateJobDto !== "undefined" && create_job_dto_1.CreateJobDto) === "function" ? _b : Object, typeof (_c = typeof users_interface_1.IUser !== "undefined" && users_interface_1.IUser) === "function" ? _c : Object]),
+    __metadata("design:returntype", void 0)
+], JobsController.prototype, "create", null);
+__decorate([
+    (0, customize_1.Public)(),
+    (0, common_1.Get)(),
+    __param(0, (0, common_1.Query)('pageSize')),
+    __param(1, (0, common_1.Query)('current')),
+    __param(2, (0, common_1.Query)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], JobsController.prototype, "findAll", null);
+__decorate([
+    (0, customize_1.Public)(),
+    (0, common_1.Get)(':id'),
+    (0, customize_1.ResponseMessage)('Find Job by id'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], JobsController.prototype, "findOne", null);
+__decorate([
+    (0, common_1.Patch)(':id'),
+    (0, customize_1.ResponseMessage)('Update Job'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, customize_1.User)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, typeof (_d = typeof update_job_dto_1.UpdateJobDto !== "undefined" && update_job_dto_1.UpdateJobDto) === "function" ? _d : Object, typeof (_e = typeof users_interface_1.IUser !== "undefined" && users_interface_1.IUser) === "function" ? _e : Object]),
+    __metadata("design:returntype", void 0)
+], JobsController.prototype, "update", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    (0, customize_1.ResponseMessage)('Delete Job'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, customize_1.User)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, typeof (_f = typeof users_interface_1.IUser !== "undefined" && users_interface_1.IUser) === "function" ? _f : Object]),
+    __metadata("design:returntype", void 0)
+], JobsController.prototype, "remove", null);
+exports.JobsController = JobsController = __decorate([
+    (0, common_1.Controller)('jobs'),
+    __metadata("design:paramtypes", [typeof (_a = typeof jobs_service_1.JobsService !== "undefined" && jobs_service_1.JobsService) === "function" ? _a : Object])
+], JobsController);
+
+
+/***/ }),
+/* 48 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+var _a, _b, _c, _d, _e;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CreateJobDto = void 0;
+const class_transformer_1 = __webpack_require__(20);
+const class_validator_1 = __webpack_require__(21);
+const mongoose_1 = __importDefault(__webpack_require__(16));
+class Company {
+}
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", typeof (_c = typeof mongoose_1.default !== "undefined" && (_a = mongoose_1.default.Schema) !== void 0 && (_b = _a.Types) !== void 0 && _b.ObjectId) === "function" ? _c : Object)
+], Company.prototype, "_id", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], Company.prototype, "name", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], Company.prototype, "logo", void 0);
+class CreateJobDto {
+}
+exports.CreateJobDto = CreateJobDto;
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateJobDto.prototype, "name", void 0);
+__decorate([
+    (0, class_validator_1.IsString)({ each: true }),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.ArrayMinSize)(1),
+    __metadata("design:type", Array)
+], CreateJobDto.prototype, "skills", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Number)
+], CreateJobDto.prototype, "salary", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", Number)
+], CreateJobDto.prototype, "quantity", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateJobDto.prototype, "level", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateJobDto.prototype, "description", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    __metadata("design:type", String)
+], CreateJobDto.prototype, "location", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_transformer_1.Transform)(({ value }) => new Date(value)),
+    (0, class_validator_1.IsDate)(),
+    __metadata("design:type", typeof (_d = typeof Date !== "undefined" && Date) === "function" ? _d : Object)
+], CreateJobDto.prototype, "startDate", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_transformer_1.Transform)(({ value }) => new Date(value)),
+    (0, class_validator_1.IsDate)(),
+    __metadata("design:type", typeof (_e = typeof Date !== "undefined" && Date) === "function" ? _e : Object)
+], CreateJobDto.prototype, "endDate", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], CreateJobDto.prototype, "isActive", void 0);
+__decorate([
+    (0, class_validator_1.IsNotEmptyObject)(),
+    (0, class_validator_1.IsObject)(),
+    (0, class_validator_1.ValidateNested)(),
+    (0, class_transformer_1.Type)(() => Company),
+    __metadata("design:type", Company)
+], CreateJobDto.prototype, "company", void 0);
+
+
+/***/ }),
+/* 49 */
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.UpdateJobDto = void 0;
+const mapped_types_1 = __webpack_require__(23);
+const create_job_dto_1 = __webpack_require__(48);
+class UpdateJobDto extends (0, mapped_types_1.PartialType)(create_job_dto_1.CreateJobDto) {
+}
+exports.UpdateJobDto = UpdateJobDto;
+
+
+/***/ }),
+/* 50 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FilesModule = void 0;
+const common_1 = __webpack_require__(6);
+const files_service_1 = __webpack_require__(51);
+const files_controller_1 = __webpack_require__(52);
+const platform_express_1 = __webpack_require__(53);
+const multer_config_1 = __webpack_require__(54);
+let FilesModule = class FilesModule {
+};
+exports.FilesModule = FilesModule;
+exports.FilesModule = FilesModule = __decorate([
+    (0, common_1.Module)({
+        imports: [
+            platform_express_1.MulterModule.registerAsync({
+                useClass: multer_config_1.MulterConfigService,
+            }),
+        ],
+        controllers: [files_controller_1.FilesController],
+        providers: [files_service_1.FilesService],
+    })
+], FilesModule);
+
+
+/***/ }),
+/* 51 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FilesService = void 0;
+const common_1 = __webpack_require__(6);
+let FilesService = class FilesService {
+};
+exports.FilesService = FilesService;
+exports.FilesService = FilesService = __decorate([
+    (0, common_1.Injectable)()
+], FilesService);
+
+
+/***/ }),
+/* 52 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+var _a, _b, _c;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FilesController = void 0;
+const common_1 = __webpack_require__(6);
+const files_service_1 = __webpack_require__(51);
+const platform_express_1 = __webpack_require__(53);
+const customize_1 = __webpack_require__(24);
+let FilesController = class FilesController {
+    constructor(filesService) {
+        this.filesService = filesService;
+    }
+    uploadFile(file) {
+        return {
+            fileName: file.filename,
+        };
+    }
+};
+exports.FilesController = FilesController;
+__decorate([
+    (0, common_1.Post)('upload'),
+    (0, customize_1.ResponseMessage)('Upload single file'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('fileUpload')),
+    __param(0, (0, common_1.UploadedFile)(new common_1.ParseFilePipeBuilder()
+        .addFileTypeValidator({
+        fileType: '.(png|jpeg|jpg|pdf|svg)',
+    })
+        .addMaxSizeValidator({
+        maxSize: 1024 * 1024 * 100,
+    })
+        .build({
+        errorHttpStatusCode: common_1.HttpStatus.UNPROCESSABLE_ENTITY,
+    }))),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_c = typeof Express !== "undefined" && (_b = Express.Multer) !== void 0 && _b.File) === "function" ? _c : Object]),
+    __metadata("design:returntype", void 0)
+], FilesController.prototype, "uploadFile", null);
+exports.FilesController = FilesController = __decorate([
+    (0, common_1.Controller)('files'),
+    __metadata("design:paramtypes", [typeof (_a = typeof files_service_1.FilesService !== "undefined" && files_service_1.FilesService) === "function" ? _a : Object])
+], FilesController);
+
+
+/***/ }),
+/* 53 */
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("@nestjs/platform-express");
+
+/***/ }),
+/* 54 */
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MulterConfigService = void 0;
+const common_1 = __webpack_require__(6);
+const fs_1 = __importDefault(__webpack_require__(55));
+const multer_1 = __webpack_require__(56);
+const path_1 = __importStar(__webpack_require__(57));
+let MulterConfigService = class MulterConfigService {
+    constructor() {
+        this.getRootPath = () => {
+            return process.cwd();
+        };
+        this.ensureExists = (targetDirectory) => {
+            fs_1.default.mkdir(targetDirectory, { recursive: true }, (error) => {
+                if (!error) {
+                    console.log('Directory successfully created, or already exist');
+                    return;
+                }
+                switch (error.code) {
+                    case 'EEXIST':
+                        break;
+                    case 'ENOTDIR':
+                        break;
+                    default:
+                        console.log(error);
+                        break;
+                }
+            });
+        };
+    }
+    createMulterOptions() {
+        return {
+            storage: (0, multer_1.diskStorage)({
+                destination: (req, file, cb) => {
+                    const folder = req?.headers?.folder_type ?? 'default';
+                    this.ensureExists(`public/images/${folder}`);
+                    cb(null, (0, path_1.join)(this.getRootPath(), `public/images/${folder}`));
+                },
+                filename: (req, file, cb) => {
+                    let extName = path_1.default.extname(file.originalname);
+                    let baseName = path_1.default.basename(file.originalname, extName);
+                    let finalName = `${baseName}-${Date.now()}${extName}`;
+                    cb(null, finalName);
+                },
+            }),
+        };
+    }
+};
+exports.MulterConfigService = MulterConfigService;
+exports.MulterConfigService = MulterConfigService = __decorate([
+    (0, common_1.Injectable)()
+], MulterConfigService);
+
+
+/***/ }),
+/* 55 */
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("fs");
+
+/***/ }),
+/* 56 */
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("multer");
+
+/***/ }),
+/* 57 */
 /***/ ((module) => {
 
 "use strict";
 module.exports = require("path");
 
 /***/ }),
-/* 45 */
+/* 58 */
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
@@ -1757,7 +2530,7 @@ exports.JwtAuthGuard = JwtAuthGuard = __decorate([
 
 
 /***/ }),
-/* 46 */
+/* 59 */
 /***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
@@ -1776,7 +2549,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.TransformInterceptor = void 0;
 const common_1 = __webpack_require__(6);
 const core_1 = __webpack_require__(4);
-const operators_1 = __webpack_require__(47);
+const operators_1 = __webpack_require__(60);
 const customize_1 = __webpack_require__(24);
 let TransformInterceptor = class TransformInterceptor {
     constructor(reflector) {
@@ -1799,14 +2572,14 @@ exports.TransformInterceptor = TransformInterceptor = __decorate([
 
 
 /***/ }),
-/* 47 */
+/* 60 */
 /***/ ((module) => {
 
 "use strict";
 module.exports = require("rxjs/operators");
 
 /***/ }),
-/* 48 */
+/* 61 */
 /***/ ((module) => {
 
 "use strict";
@@ -1874,7 +2647,7 @@ module.exports = require("cookie-parser");
 /******/ 	
 /******/ 	/* webpack/runtime/getFullHash */
 /******/ 	(() => {
-/******/ 		__webpack_require__.h = () => ("203bff3cfb5c31fc9118")
+/******/ 		__webpack_require__.h = () => ("b464f761ee8ef37e7b14")
 /******/ 	})();
 /******/ 	
 /******/ 	/* webpack/runtime/hasOwnProperty shorthand */
